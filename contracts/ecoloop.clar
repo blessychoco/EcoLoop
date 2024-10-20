@@ -1,4 +1,4 @@
-;; EcoLoop Smart Contract
+;; EcoLoop Smart Contract - with Enhanced Input Validation
 
 ;; Constants
 (define-constant CONTRACT_OWNER tx-sender)
@@ -6,10 +6,14 @@
 (define-constant ERR_ITEM_NOT_FOUND (err u2))
 (define-constant ERR_INVALID_INPUT (err u3))
 (define-constant ERR_ITEM_ALREADY_EXISTS (err u4))
-(define-constant MAX_DESCRIPTION_LENGTH u256)
+(define-constant ERR_INVALID_STATUS (err u5))
+(define-constant MAX_DESCRIPTION_LENGTH u128)  ;; Changed from u256 to u128 (128 bytes)
 (define-constant MAX_REPUTATION_POINTS u1000000)
 (define-constant REPUTATION_THRESHOLD u100)
 (define-constant MAX_ITEMS_PER_USER u1000)
+
+;; Valid item statuses
+(define-data-var valid-statuses (list 5 (string-ascii 20)) (list "available" "reserved" "sold" "repairing" "recycled"))
 
 ;; Data variables
 (define-data-var total-items uint u0)
@@ -17,7 +21,7 @@
 ;; Data maps
 (define-map items 
   { owner: principal, id: uint } 
-  { description: (string-ascii 256), status: (string-ascii 20) })
+  { description: (string-ascii 128), status: (string-ascii 20) })
 (define-map user-data
   principal
   { reputation: uint, items-count: uint })
@@ -36,8 +40,11 @@
         new-count)
       u0))) ;; Return 0 if max items reached, which will be caught in add-item
 
+(define-private (is-valid-status (status (string-ascii 20)))
+  (is-some (index-of (var-get valid-statuses) status)))
+
 ;; Public functions
-(define-public (add-item (description (string-ascii 256)))
+(define-public (add-item (description (string-ascii 128)))
   (let ((caller tx-sender)
         (item-id (get-and-increment-user-items caller)))
     (if (is-eq item-id u0)
@@ -57,13 +64,15 @@
   (let ((caller tx-sender)
         (user-info (default-to { reputation: u0, items-count: u0 } (map-get? user-data caller))))
     (if (and (> item-id u0) (<= item-id (get items-count user-info)))
-      (match (map-get? items {owner: caller, id: item-id})
-        item (begin
-          (map-set items 
-            {owner: caller, id: item-id}
-            (merge item {status: new-status}))
-          (ok true))
-        ERR_ITEM_NOT_FOUND)
+      (if (is-valid-status new-status)
+        (match (map-get? items {owner: caller, id: item-id})
+          item (begin
+            (map-set items 
+              {owner: caller, id: item-id}
+              (merge item {status: new-status}))
+            (ok true))
+          ERR_ITEM_NOT_FOUND)
+        ERR_INVALID_STATUS)
       ERR_INVALID_INPUT)))
 
 (define-public (remove-item (item-id uint))
@@ -106,3 +115,6 @@
 
 (define-read-only (can-perform-action (user principal))
   (>= (get reputation (get-user-data user)) REPUTATION_THRESHOLD))
+
+(define-read-only (get-valid-statuses)
+  (ok (var-get valid-statuses)))
